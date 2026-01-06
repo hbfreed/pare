@@ -1,0 +1,18 @@
+[project]
+name = "pare"
+version = "0.1.0"
+description = "Pruning LLMs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=4.4.2",
+    "flash-attn>=2.8.3",
+    "liger-kernel>=0.6.4",
+    "torch>=2.9.0",
+    "transformers>=4.57.3",
+    "vllm>=0.13.0",
+    "zstandard>=0.25.0",
+]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]
