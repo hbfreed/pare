@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
-
+importance_scores_tensors/
+cached_tokens.pt
 # Virtual environments
 .venv
