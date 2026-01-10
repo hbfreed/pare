@@ -23,18 +23,47 @@ Note that only pruning width seems to slightly defeat the purpose of making smal
 I ran the Olmo 3 evals on my machine (I had to edit [olmes](https://github.com/allenai/olmes.git) a fair amount to actually get it running). Here are the baseline stats I'm going with, they match the reported evals well!
 
 ## Project Structure
-The hope for this project is for it to be really simple, and as flat as possible. Just a few scripts that are quite configurable. Ideally, we won't have tons of configs cli args or anything.
+The hope for this project is for it to be really simple, and as flat as possible. Just a few scripts that are hopefully pretty configurable. Ideally, we won't have tons of configs cli args or anything.
 First, analyze the width importance and layer importance with importance_analysis.py:
 ```uv run importance_analysis.py```
-This will save a json file (?).
+This will save a .pt file with the following structure:
+
+| Key | Shape | Description |
+|-----|-------|-------------|
+| `mlp` | `[n layers, intermediate size]` | Per-neuron importance scores (L2 norm of activations) for each layer's FFN |
+| `attention` | `[n layers, number of attention heads]` | Per-head importance scores for each layer |
+| `attn_ln` | `[hidden size]` | Aggregated importance per hidden dimension for attention layer norms |
+| `ffn_ln` | `[hidden size]` | Aggregated importance per hidden dimension for FFN layer norms |
+| `layer` | dict of n layers scalars | Cosine-similarity-based importance per layer (for depth pruning) |
+
 Then, prune!
 ```uv run prune.py```
 Then, evaluate with your eval harness and dataset of choice. I used olmes like I said above, but I actually wouldn't recommend it. (Openbench)[https://github.com/groq/openbench] with vLLM is much less of a hassle, in my opinion. I used olmes to make the comparison to the published Olmo 3 results easier for me. 
 
-Finally, distill, and evaluate!
+Finally, distill and evaluate!
 ```uv run distill.py```
 
 ## Best Practices Notes
 2. A pretty important detail: take the mean over sequence length first, and then l2 norm. 
 3. One run through the model with 1024 samples is enough to figure out what to trim.
 4. See note about width pruning above.
+
+## Open Questions / Future Experiments
+
+### Distillation Strategy
+- **On-policy vs off-policy distillation** for pruned model recovery - student generates, teacher scores vs both see same input
+- **Larger teacher with top-k logits** (32B OLMo) vs same-size teacher (7B) with full logits - richer signal, cheaper storage? Storing Top-K could be nice
+
+### Pruning Decisions
+- **Protect full attention layers?** Layer 27 (full attn) scored lowest on depth importance - drop it or preserve for long-range dependencies?
+- **Global vs per-layer MLP pruning** - normalize scores then rank globally, letting some layers keep more neurons than others
+- **Prune MHA → GQA?** Mean-pool K/V heads within groups, use importance scores to decide which heads to cluster
+
+### Architecture Search
+- **Zero-shot PPL as filter** - prune, eval perplexity, drop catastrophic configs before any training
+- **Minimum tokens to see separation** - 20M? 50M? 100M? Funnel approach vs flat search
+- **Convergent evidence** - layers weak on both depth score AND global neuron count (24-27) are strong drop candidates
+
+### OLMo3-Specific
+- **Sliding vs full attention layer behavior** - do they score differently? Should pruning strategy differ?
+- Layer 2 anomaly: decent depth score (15.44) but only 4050 neurons globally - doing something specific with few neurons?

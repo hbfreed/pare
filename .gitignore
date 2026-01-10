@@ -5,7 +5,24 @@ build/
 dist/
 wheels/
 *.egg-info
-importance_scores_tensors/
-cached_tokens.pt
+
 # Virtual environments
 .venv
+
+# Model artifacts
+importance_scores_tensors/
+pruned_models/
+distilled_models/
+checkpoints/
+
+# Dataset files
+completions_*.jsonl
+logprobs_*.jsonl
+dolci_tokenized/
+dolci_final/
+tokenized_dolma/
+cached_tokens.pt
+cache/
+
+# Claude Code
+.claude/
