@@ -4,6 +4,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
+from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -14,7 +15,7 @@ torch.backends.cudnn.allow_tf32 = True
 MODEL = "allenai/Olmo-3-7B-Instruct"
 DEVICE = "cuda:1"
 DATASET_NAME = "allenai/dolma3_mix-6T"
-CACHE_PATH = "cached_tokens.pt"
+CACHE_PATH = "cached_tokens.safetensors"
 
 sequence_length = 8192  # trying the same seq_len as pretraining
 num_samples = 1024  # specified in the nvidia paper
@@ -88,14 +89,14 @@ def make_layer_hook(name):
 
 def main():
     if Path(CACHE_PATH).exists():
-        all_tokens = torch.load(CACHE_PATH)
+        all_tokens = load_file(CACHE_PATH)["tokens"]
     else:
         dataset = tokenize_dataset(get_dataset())
         total_tokens = sequence_length * num_samples
         all_tokens = torch.tensor(dataset[:total_tokens]).view(
             num_samples, sequence_length
         )
-        torch.save(all_tokens, CACHE_PATH)
+        save_file({"tokens": all_tokens}, CACHE_PATH)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL, dtype=torch.bfloat16, attn_implementation="flash_attention_2"
     )
@@ -162,16 +163,18 @@ def main():
         elif "ffn_ln" in key:
             ffn_ln_importance += value
 
-    torch.save(
-        {
-            "mlp": mlp_importance.cpu(),
-            "attention": attention_importance.cpu(),
-            "attn_ln": attn_ln_importance.cpu(),
-            "ffn_ln": ffn_ln_importance.cpu(),
-            "layer": {k: v.cpu() for k, v in layer_importance_dict.items()},
-        },
-        "importance_scores_tensors/importance_scores.pt",
-    )
+    # Flatten for safetensors (only supports flat {str: tensor} dicts)
+    scores = {
+        "mlp": mlp_importance.cpu(),
+        "attention": attention_importance.cpu(),
+        "attn_ln": attn_ln_importance.cpu(),
+        "ffn_ln": ffn_ln_importance.cpu(),
+    }
+    # Add layer scores with flattened keys
+    for k, v in layer_importance_dict.items():
+        scores[f"layer.{k}"] = v.cpu()
+
+    save_file(scores, "importance_scores_tensors/importance_scores.safetensors")
 
 
 if __name__ == "__main__":

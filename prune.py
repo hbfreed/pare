@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
+from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL = "allenai/Olmo-3-7B-Instruct"
 DEVICE = "cuda:1"
-importance_scores = torch.load(
-    "importance_scores_tensors/olmo_3_7b_importance_scores.pt"
+importance_scores = load_file(
+    "importance_scores_tensors/olmo_3_7b_importance_scores.safetensors"
 )
 
 HIDDEN_SIZE = 4096
@@ -43,7 +44,8 @@ def get_layers_to_drop(num_layers_to_keep, protect_full_attention=True):
     if num_layers_to_keep == NUM_LAYERS:
         return []
 
-    layer_importance = importance_scores["layer"]
+    # Layer scores are flattened as "layer.layer_N" in safetensors
+    layer_importance = {k: v for k, v in importance_scores.items() if k.startswith("layer.")}
     scores = [(int(k.split("_")[1]), v) for k, v in layer_importance.items()]
     scores.sort(key=lambda x: x[1], reverse=True)  # highest first
 

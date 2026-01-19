@@ -7,20 +7,20 @@ import json
 import glob
 from datasets import Dataset
 from transformers import AutoTokenizer
+from tqdm import tqdm
 
 TOKENIZER_NAME = "allenai/Olmo-3-7B-Instruct"
 OUTPUT_PATH = "dolci_tokenized"
 HUB_DATASET = "hbfreed/Dolci-Instruct-RL-Completions"
 
-def load_completions(pattern: str = "completions_*.jsonl") -> list[dict]:
-    """Load and combine all completion JSONL files."""
+def load_completions(filepath: str = "completions_final.jsonl") -> list[dict]:
+    """Load completions from JSONL file."""
     all_records = []
-    for filepath in sorted(glob.glob(pattern)):
-        print(f"Loading {filepath}...")
-        with open(filepath, "r") as f:
-            for line in f:
-                if line.strip():
-                    all_records.append(json.loads(line))
+    print(f"Loading {filepath}...")
+    with open(filepath, "r") as f:
+        for line in f:
+            if line.strip():
+                all_records.append(json.loads(line))
     print(f"Loaded {len(all_records)} total records")
     return all_records
 
@@ -28,14 +28,20 @@ def build_dataset(records: list[dict]) -> Dataset:
     """
     Build HF dataset with properly formatted completions.
 
-    IMPORTANT: Adds <|im_end|> to each completion before tokenizing!
+    Tokenizes prompts with chat template and completions with <|im_end|>.
     """
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 
     processed = []
-    for rec in records:
-        # Get the prompt input_ids (already tokenized with chat template)
-        input_ids_prompt = rec["input_ids_prompt"]
+    for rec in tqdm(records, desc="Tokenizing"):
+        # Apply chat template to prompt to get input_ids_prompt
+        messages = [{"role": "user", "content": rec["prompt"]}]
+        # add_generation_prompt=True adds the assistant turn start
+        input_ids_prompt = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True
+        )
 
         # Tokenize completion WITH <|im_end|> appended
         completion_text = rec["completion"] + "<|im_end|>"
@@ -43,7 +49,6 @@ def build_dataset(records: list[dict]) -> Dataset:
 
         processed.append({
             "idx": rec["idx"],
-            "id": rec.get("id"),
             "input_ids_prompt": input_ids_prompt,
             "input_ids_completion": input_ids_completion,
         })

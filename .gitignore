@@ -26,3 +26,6 @@ cache/
 
 # Claude Code
 .claude/
+
+# Weights & Biases
+wandb/

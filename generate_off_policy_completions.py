@@ -41,32 +41,46 @@ def get_done_indices(output_dir: Path, num_ranks: int) -> set:
                         continue
     return done
 
-def get_remaining_indices(total: int, done: set) -> list:
+def get_remaining_indices(total: int, done: set, indices_file: str = None) -> list:
     """Get indices that still need processing."""
+    if indices_file and Path(indices_file).exists():
+        with open(indices_file) as f:
+            indices = json.load(f)
+        return sorted([i for i in indices if i not in done])
     return sorted([i for i in range(total) if i not in done])
 
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--rank', type=int, required=True)
-    parser.add_argument('--num-ranks', type=int, default=3)
-    parser.add_argument('--concurrency', type=int, default=64)
+    parser.add_argument('--num-ranks', type=int, default=4)
+    parser.add_argument('--concurrency', type=int, default=32)
     parser.add_argument('--timeout', type=float, default=600.0)
     parser.add_argument('--port-base', type=int, default=8000)
     parser.add_argument('--model', type=str, default='allenai/Olmo-3-7B-Instruct')
     parser.add_argument('--dataset', type=str, default='allenai/Dolci-Instruct-RL')
     parser.add_argument('--prompt-field', type=str, default='prompt')
     parser.add_argument('--output-dir', type=str, default='.')
+    parser.add_argument('--indices-file', type=str, default=None, help='JSON file with specific indices to retry')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
-    port = args.port_base + args.rank
-    client = AsyncOpenAI(
-        base_url=f"http://localhost:{port}/v1",
-        api_key="none",
-        timeout=args.timeout
-    )
+    if args.rank <= 2:
+        # Ranks 0-2: local vLLM
+        port = args.port_base + args.rank
+        client = AsyncOpenAI(
+            base_url=f"http://localhost:{port}/v1",
+            api_key="none",
+            timeout=args.timeout
+        )
+    else:
+        # Rank 3: OpenRouter
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key= "REDACTED",
+            timeout=args.timeout
+        )
 
     # Load dataset
     print(f"Loading dataset {args.dataset}...")
@@ -75,7 +89,7 @@ async def main():
 
     # Figure out what's done across ALL ranks
     done = get_done_indices(output_dir, args.num_ranks)
-    remaining = get_remaining_indices(total, done)
+    remaining = get_remaining_indices(total, done, args.indices_file)
     print(f"Total: {total}, Done: {len(done)}, Remaining: {len(remaining)}")
 
     # Split remaining work evenly across ranks
