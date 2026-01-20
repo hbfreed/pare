@@ -15,10 +15,12 @@ dependencies = [
     "torch>=2.9.0",
     "torchao>=0.15.0",
     "transformers>=4.57.3",
-    "vllm",
     "wandb>=0.23.1",
     "zstandard>=0.25.0",
 ]
+
+[project.optional-dependencies]
+inference = ["vllm"]
 
 [tool.uv.sources]
 vllm = { git = "https://github.com/hbfreed/vllm.git" }
