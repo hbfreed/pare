@@ -78,7 +78,7 @@ async def main():
         # Rank 3: OpenRouter
         client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key= "REDACTED",
+            api_key=os.environ["OPENROUTER_API_KEY"],
             timeout=args.timeout
         )
 

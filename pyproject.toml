@@ -15,10 +15,13 @@ dependencies = [
     "torch>=2.9.0",
     "torchao>=0.15.0",
     "transformers>=4.57.3",
-    "vllm>=0.13.0",
+    "vllm",
     "wandb>=0.23.1",
     "zstandard>=0.25.0",
 ]
+
+[tool.uv.sources]
+vllm = { git = "https://github.com/hbfreed/vllm.git" }
 
 [tool.uv.extra-build-dependencies]
 flash-attn = ["torch"]
