@@ -1,7 +1,7 @@
 [project]
 name = "pare"
 version = "0.1.0"
-description = "Pruning LLMs"
+description = "Pruning and knowledge distillation for large language models"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
     "flash-attn>=2.8.3",
     "hf-transfer>=0.1.9",
     "liger-kernel>=0.6.4",
+    "openbench>=0.5.3",
     "safetensors>=0.5.0",
     "torch>=2.9.0",
     "torchao>=0.15.0",
