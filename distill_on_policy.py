@@ -18,8 +18,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from queue import Queue
 
-os.environ["VLLM_USE_V1"] = "0"  # V0 engine runs in-process, avoids subprocess deadlock with torchrun
-
 import bitsandbytes as bnb
 import cloudpickle
 from huggingface_hub import HfApi, hf_hub_download
@@ -57,7 +55,7 @@ BATCH_SIZE = 1
 N_EPOCHS = 1
 GROUP_SIZE = 4  # number of rollouts per prompt
 GRAD_ACCUM_STEPS = 256
-MAX_CONTEXT_LENGTH = 4096
+MAX_CONTEXT_LENGTH = 2048
 LR = 1e-5
 CLIP_EPS = 0.2
 MAX_GRAD_NORM = 3.0
@@ -180,7 +178,15 @@ def prepare_prompts(opt_step_idx, all_batches, tokenizer, grad_accum_steps):
     """Get pretokenized prompts for a given optimizer step index."""
     chunk_start = opt_step_idx * grad_accum_steps
     chunk_end = chunk_start + grad_accum_steps
-    return [all_batches[i]["input_ids_prompt"] for i in range(chunk_start, chunk_end)]
+    # .iter(batch_size=N) wraps values in a list; unwrap to get flat list[int] per prompt
+    prompts = []
+    for i in range(chunk_start, chunk_end):
+        batch = all_batches[i]["input_ids_prompt"]
+        if isinstance(batch[0], list):
+            prompts.extend(batch)
+        else:
+            prompts.append(batch)
+    return prompts
 
 
 def timed_generate_rollouts(*args, **kwargs):
@@ -206,7 +212,7 @@ def generate_samples(vllm_student, eval_prompts, tokenizer, max_context_length=4
     sampling_params = SamplingParams(
         temperature=0.7, max_tokens=max_context_length - max_prompt_len, n=1,
     )
-    token_prompts = [{"prompt_token_ids": p} for p in eval_prompts]
+    token_prompts = [{"prompt_token_ids": [int(x) for x in p]} for p in eval_prompts]
     outputs = vllm_student.generate(
         prompts=token_prompts, sampling_params=sampling_params, use_tqdm=False,
     )
@@ -366,12 +372,15 @@ def collect_teacher_logprobs(teacher, sequences, attention_mask,
                              teacher_micro_batch_size, student_device):
     """Run teacher pipeline synchronously, return full [N, seq_len-1] tensor."""
     queue = Queue(maxsize=4)
-    # Run in current thread — teacher has its own GPU, no contention
+    # Set CUDA device to teacher's GPU so Triton kernels launch on the right device
+    prev_device = torch.cuda.current_device()
+    torch.cuda.set_device(TEACHER_DEVICE)
     run_teacher_pipeline(teacher, sequences, attention_mask,
                          teacher_micro_batch_size, TEACHER_DEVICE,
                          student_device, queue,
                          consumer_chunk_size=len(sequences))
     result = queue.get()
+    torch.cuda.set_device(prev_device)
     if isinstance(result, BaseException):
         raise result
     sentinel = queue.get()
@@ -407,14 +416,26 @@ def main_ddp():
     vllm_student = None
     if local_rank == 0:
         print("Loading vLLM student on cuda:0...")
-        ddp_env_keys = ["RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE",
-                        "MASTER_ADDR", "MASTER_PORT", "GROUP_RANK", "TORCHELASTIC_RUN_ID"]
-        saved_env = {k: os.environ.pop(k) for k in ddp_env_keys if k in os.environ}
+        # Clear ALL torchrun/torchelastic env vars so vLLM's EngineCore subprocess
+        # doesn't try to join DDP or use the agent store for rendezvous
+        torchrun_prefixes = ("RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE",
+                             "MASTER_ADDR", "MASTER_PORT", "GROUP_RANK", "GROUP_WORLD_SIZE",
+                             "ROLE_RANK", "ROLE_WORLD_SIZE", "TORCHELASTIC_", "TORCH_NCCL_",
+                             "NCCL_")
+        saved_env = {}
+        for k in list(os.environ):
+            if any(k == p or k.startswith(p) for p in torchrun_prefixes):
+                saved_env[k] = os.environ.pop(k)
         vllm_student = LLM(
             STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
             enforce_eager=True,
         )
         os.environ.update(saved_env)
+
+    # Set CUDA device before DDP init so NCCL doesn't default to cuda:0
+    # (which vLLM's EngineCore subprocess needs)
+    if local_rank != 0:
+        torch.cuda.set_device(f"cuda:{local_rank + DDP_GPU_OFFSET}")
 
     # DDP init (long timeout for rank 0 model loading)
     dist.init_process_group(backend="nccl", timeout=datetime.timedelta(minutes=30))
