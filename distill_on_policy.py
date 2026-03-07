@@ -266,11 +266,33 @@ def save_checkpoint(student, tokenizer, optimizer, global_step, hub_repo=None):
 
 
 def sync_weights_to_vllm(hf_model, vllm_llm):
-    """Sync weights from HF model to vLLM engine for on-policy learning."""
+    """Sync weights from HF model to vLLM engine for on-policy learning.
+
+    Sends weights in chunks to avoid msgspec's 4GB encoding limit.
+    """
     hf_state_dict = {k: v.cpu() for k, v in hf_model.state_dict().items()}
-    buffer = io.BytesIO()
-    torch.save(hf_state_dict, buffer)
-    weights_bytes = buffer.getvalue()
+
+    # Split state dict into chunks that serialize under 4GB each
+    chunks = []
+    current_chunk = {}
+    current_size = 0
+    max_chunk_bytes = 2 * (1024 ** 3)  # 2GB per chunk for safety margin
+
+    for k, v in hf_state_dict.items():
+        tensor_bytes = v.nelement() * v.element_size()
+        if current_size + tensor_bytes > max_chunk_bytes and current_chunk:
+            buf = io.BytesIO()
+            torch.save(current_chunk, buf)
+            chunks.append(buf.getvalue())
+            current_chunk = {}
+            current_size = 0
+        current_chunk[k] = v
+        current_size += tensor_bytes
+
+    if current_chunk:
+        buf = io.BytesIO()
+        torch.save(current_chunk, buf)
+        chunks.append(buf.getvalue())
 
     def load_weights_on_worker(worker, serialized_weights):
         buf = io.BytesIO(serialized_weights)
@@ -279,7 +301,8 @@ def sync_weights_to_vllm(hf_model, vllm_llm):
         worker.model_runner.model.load_weights(weights=weights)
 
     method_bytes = cloudpickle.dumps(load_weights_on_worker)
-    vllm_llm.llm_engine.collective_rpc(method_bytes, args=(weights_bytes,))
+    for chunk in chunks:
+        vllm_llm.llm_engine.collective_rpc(method_bytes, args=(chunk,))
 
 
 def timed_sync_weights_to_vllm(hf_model, vllm_llm):
