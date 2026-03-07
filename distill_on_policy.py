@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from queue import Queue
 
+os.environ["VLLM_USE_V1"] = "0"  # V0 engine runs in-process, avoids subprocess deadlock with torchrun
+
 import bitsandbytes as bnb
 import cloudpickle
 from huggingface_hub import HfApi, hf_hub_download
