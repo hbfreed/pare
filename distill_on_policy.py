@@ -55,7 +55,7 @@ BATCH_SIZE = 1
 N_EPOCHS = 1
 GROUP_SIZE = 4  # number of rollouts per prompt
 GRAD_ACCUM_STEPS = 256
-MAX_CONTEXT_LENGTH = 2048
+MAX_CONTEXT_LENGTH = 512
 LR = 1e-5
 CLIP_EPS = 0.2
 MAX_GRAD_NORM = 3.0
@@ -495,6 +495,7 @@ def main_ddp():
     teacher = None
     vllm_executor = None
     checkpoint_executor = None
+    teacher_executor = None
     eval_prompts = None
 
     if rank == 0:
@@ -512,6 +513,7 @@ def main_ddp():
 
         vllm_executor = ThreadPoolExecutor(max_workers=1)
         checkpoint_executor = ThreadPoolExecutor(max_workers=1)
+        teacher_executor = ThreadPoolExecutor(max_workers=1)
 
     # Resume from checkpoint
     start_step = 0
@@ -666,40 +668,59 @@ def main_ddp():
                 hit_eos = ((sequences == tokenizer.eos_token_id) & completion_mask).any(dim=1)
                 prompt_lens_t = torch.tensor(prompt_lens, dtype=torch.long)
 
-                # Collect ALL teacher logprobs before broadcast
-                teacher_logprobs_all = collect_teacher_logprobs(
-                    teacher, sequences, attention_mask,
-                    teacher_micro_batch_size, device,
-                )
-                # Move teacher logprobs to CPU for broadcast
-                teacher_logprobs_all = teacher_logprobs_all.cpu().float()
                 old_student_logprobs = old_student_logprobs.float()
 
-            # === Broadcast rollout data to all ranks ===
-            (sequences, attention_mask, old_student_logprobs,
-             teacher_logprobs_all, hit_eos, prompt_lens_t) = broadcast_rollout_data(
-                rank, world_size, device, sequences, attention_mask,
-                old_student_logprobs, teacher_logprobs_all,
-                hit_eos, prompt_lens_t,
-            )
+            if world_size > 1:
+                # Multi-rank: collect all teacher logprobs, broadcast, then train
+                if rank == 0:
+                    teacher_logprobs_all = collect_teacher_logprobs(
+                        teacher, sequences, attention_mask,
+                        teacher_micro_batch_size, device,
+                    )
+                    teacher_logprobs_all = teacher_logprobs_all.cpu().float()
 
-            prompt_lens = prompt_lens_t.tolist()
+                (sequences, attention_mask, old_student_logprobs,
+                 teacher_logprobs_all, hit_eos, prompt_lens_t) = broadcast_rollout_data(
+                    rank, world_size, device, sequences, attention_mask,
+                    old_student_logprobs, teacher_logprobs_all,
+                    hit_eos, prompt_lens_t,
+                )
+                prompt_lens = prompt_lens_t.tolist()
 
             # Pre-compute masks on each rank's device
             old_logprobs_shifted_all = old_student_logprobs[:, 1:].to(device)
             loss_mask_all = build_loss_mask(sequences.to(device), prompt_lens, PAD_TOKEN_ID)
-            teacher_logprobs_all = teacher_logprobs_all.to(device)
             total_generated_tokens = loss_mask_all.sum().item()
 
             # === Micro-batch loop (DDP) ===
             rank_start = rank * mbs_per_rank
+
+            if world_size == 1:
+                # Stream teacher logprobs: teacher runs in background thread,
+                # student consumes chunks as they arrive (overlapping GPU work)
+                teacher_queue = Queue(maxsize=4)
+                torch.cuda.set_device(TEACHER_DEVICE)
+                teacher_future = teacher_executor.submit(
+                    run_teacher_pipeline, teacher, sequences, attention_mask,
+                    teacher_micro_batch_size, TEACHER_DEVICE, device, teacher_queue,
+                    micro_batch_size,
+                )
+                torch.cuda.set_device(device)
+            else:
+                teacher_logprobs_all = teacher_logprobs_all.to(device)
 
             for local_idx in range(mbs_per_rank):
                 mb_idx = rank_start + local_idx
                 seq_start = mb_idx * micro_batch_size
                 seq_end = seq_start + micro_batch_size
 
-                teacher_lp = teacher_logprobs_all[seq_start:seq_end]
+                if world_size == 1:
+                    teacher_lp = teacher_queue.get()
+                    if isinstance(teacher_lp, BaseException):
+                        raise teacher_lp
+                else:
+                    teacher_lp = teacher_logprobs_all[seq_start:seq_end]
+
                 mb_old_lp = old_logprobs_shifted_all[seq_start:seq_end]
                 mb_loss_mask = loss_mask_all[seq_start:seq_end]
                 mb_advantage = -(mb_old_lp - teacher_lp).detach()
@@ -740,6 +761,11 @@ def main_ddp():
                 with ctx:
                     scaled_loss.backward()
                 accumulated_loss += scaled_loss.item()
+
+            if world_size == 1:
+                # Drain sentinel and propagate any teacher exception
+                assert teacher_queue.get() is None
+                teacher_future.result()
 
             # === Optimizer step ===
             if global_step < 3:
@@ -866,6 +892,8 @@ def main_ddp():
         hub_repo = None if DEBUG_MODE else HUB_REPO
         save_checkpoint(student.module, tokenizer, optimizer, global_step, hub_repo)
         wandb.finish()
+        if teacher_executor is not None:
+            teacher_executor.shutdown(wait=False)
         print("Done!")
 
     dist.destroy_process_group()
