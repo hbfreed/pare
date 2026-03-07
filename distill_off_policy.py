@@ -184,21 +184,16 @@ total_steps = steps_per_epoch * n_epochs
 eval_every = max(1, int(total_steps * 0.1))
 save_every = max(1, min(500, int(total_steps * 0.02)))
 
-# Check for existing checkpoint
-resume_step, resume_state = load_resume_state(HUB_REPO)
+RESUME_FROM = None  # set to HUB_REPO or a path to resume, None to start fresh
 
-#if resume_step > 0:
-#    print(f"Resuming from step {resume_step}")
-#    STUDENT = HUB_REPO  # Load from checkpoint
-#else:
-#    print("Starting fresh")
-#    STUDENT = BASE_MODEL
-
-# CHANGE THIS ONCE WE GET RUNNING AGAIN
-# HARDCODED FOR THIS RESUME - auto-detect will work after first checkpoint
-resume_step = 1391
-resume_state = None  # No optimizer state saved from previous run
-STUDENT = HUB_REPO  # Load from checkpoint
+if RESUME_FROM is not None:
+    resume_step, resume_state = load_resume_state(RESUME_FROM)
+    STUDENT = RESUME_FROM
+    print(f"Resuming from step {resume_step}")
+else:
+    resume_step, resume_state = 0, None
+    STUDENT = BASE_MODEL
+    print("Starting fresh")
 
 remaining_steps = total_steps - resume_step
 
@@ -218,7 +213,7 @@ print(f"Created {len(val_batches)} validation batches")
 print(f"Loading student model from {STUDENT}...")
 student = AutoLigerKernelForCausalLM.from_pretrained(
     STUDENT,
-    torch_dtype=torch.bfloat16,
+    dtype=torch.bfloat16,
     attn_implementation="flash_attention_2"
 ).to(device)
 

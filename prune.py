@@ -8,9 +8,9 @@ DEVICE = "cuda:1"
 importance_scores = load_file(
     "importance_scores_tensors/olmo_3_7b_importance_scores.safetensors"
 )
-
-HIDDEN_SIZE = 4096
-NUM_HEADS = 32
+#ORIGINAL MODEL ATTRIBUTES
+HIDDEN_SIZE = 4096 
+NUM_HEADS = 32 
 HEAD_DIM = 128
 NUM_LAYERS = 32
 # Olmo uses SWA, want to keep the full attention layers
@@ -172,7 +172,7 @@ def count_params(model):
 
 
 if __name__ == "__main__":
-    config = (5120, 16, 29)
+    config = (8192, 16, 32)
     model = prune_model(*config)  # mlp_width, num_heads, num_layers
     model = model.to(DEVICE)
 

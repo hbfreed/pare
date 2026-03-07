@@ -2,7 +2,11 @@
 Generate teacher logprobs for distillation dataset.
 
 Mirrors generate_off_policy_completions.py pattern for multi-rank processing.
-Reads tokenized dataset (from build_distill_dataset.py) and adds top-128 logprobs.
+Reads tokenized dataset (from generate_off_policy_completions.py --build-dataset)
+and adds top-128 logprobs.
+
+After all ranks finish, merge into final dataset:
+    python generate_off_policy_logprobs.py --finalize
 """
 
 import argparse
@@ -11,7 +15,7 @@ import json
 import time
 from pathlib import Path
 
-from datasets import load_from_disk
+from datasets import load_from_disk, Dataset, concatenate_datasets
 from openai import AsyncOpenAI
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -101,9 +105,86 @@ def get_remaining_indices(total: int, done: set) -> list:
     return sorted([i for i in range(total) if i not in done])
 
 
+def finalize_dataset(output_dir: Path, num_ranks: int, dataset_path: str, final_output: str):
+    """Merge tokenized dataset with logprobs into final dataset (replaces finalize_distill_dataset.py)."""
+    print(f"Loading tokenized dataset from {dataset_path}...")
+    tokenized_ds = load_from_disk(dataset_path)
+
+    # Build lookup from tokenized dataset (small, fits in memory)
+    print("Building tokenized lookup...")
+    tokenized_lookup = {}
+    for i in tqdm(range(len(tokenized_ds)), desc="Indexing"):
+        example = tokenized_ds[i]
+        tokenized_lookup[example['idx']] = {
+            'input_ids_prompt': example['input_ids_prompt'],
+            'input_ids_completion': example['input_ids_completion'],
+        }
+    print(f"Indexed {len(tokenized_lookup)} tokenized examples")
+
+    # Collect logprobs files
+    logprobs_files = []
+    for rank in range(num_ranks):
+        filepath = output_dir / f"logprobs_{rank}.jsonl"
+        if filepath.exists():
+            logprobs_files.append(filepath)
+        else:
+            print(f"Warning: {filepath} not found, skipping")
+
+    # Stream through logprobs and merge with tokenized data
+    seen_indices = set()
+    yielded = 0
+    skipped = 0
+
+    def gen():
+        nonlocal yielded, skipped
+        for filepath in logprobs_files:
+            print(f"Processing {filepath}...")
+            with open(filepath) as f:
+                for line in tqdm(f, desc=f"  {filepath.name}"):
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    idx = row['idx']
+                    if row.get('teacher_indices') is None:
+                        skipped += 1
+                        continue
+                    if idx in seen_indices:
+                        continue
+                    if idx not in tokenized_lookup:
+                        continue
+
+                    seen_indices.add(idx)
+                    tokenized = tokenized_lookup[idx]
+                    yielded += 1
+
+                    # Use teacher_logprobs from vLLM API (these are true logprobs)
+                    yield {
+                        'idx': idx,
+                        'input_ids_prompt': tokenized['input_ids_prompt'],
+                        'input_ids_completion': tokenized['input_ids_completion'],
+                        'teacher_indices': row['teacher_indices'],
+                        'teacher_logprobs': row['teacher_logprobs'],
+                    }
+
+    final_ds = Dataset.from_generator(gen)
+    print(f"\nFinal dataset: {len(final_ds)} examples (skipped {skipped} errors)")
+
+    if len(final_ds) == 0:
+        print("ERROR: No examples in final dataset!")
+        return
+
+    final_ds = final_ds.sort('idx')
+    final_ds.save_to_disk(final_output)
+    print(f"Saved to {final_output}")
+
+
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rank", type=int, required=True)
+    parser.add_argument("--rank", type=int, default=None)
     parser.add_argument("--num-ranks", type=int, default=3)
     parser.add_argument("--concurrency", type=int, default=192)
     parser.add_argument("--timeout", type=float, default=600.0)
@@ -111,10 +192,21 @@ async def main():
     parser.add_argument("--model", type=str, default="allenai/Olmo-3-7B-Instruct")
     parser.add_argument("--dataset-path", type=str, default="dolci_tokenized")
     parser.add_argument("--output-dir", type=str, default=".")
+    parser.add_argument("--finalize", action="store_true",
+                        help="Merge logprobs with tokenized dataset into final dataset")
+    parser.add_argument("--final-output", type=str, default="dolci_final",
+                        help="Output path for finalized dataset (used with --finalize)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
+
+    if args.finalize:
+        finalize_dataset(output_dir, args.num_ranks, args.dataset_path, args.final_output)
+        return
+
+    if args.rank is None:
+        parser.error("--rank is required when not using --finalize")
 
     port = args.port_base + args.rank
     client = AsyncOpenAI(

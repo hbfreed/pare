@@ -29,3 +29,9 @@ cache/
 
 # Weights & Biases
 wandb/
+
+# Editor swap files
+*.swp
+
+# Logs
+logs/

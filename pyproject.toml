@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-inference = ["vllm"]
+inference = ["vllm", "cloudpickle>=3.0.0", "lm-eval[vllm]>=0.4.0"]
 
 [tool.uv.sources]
 vllm = { git = "https://github.com/hbfreed/vllm.git" }
