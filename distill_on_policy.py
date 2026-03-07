@@ -469,10 +469,15 @@ def main_ddp():
         print(f"Student vocab: {SHARED_VOCAB_SIZE}, Teacher vocab: {teacher.config.vocab_size}")
 
         print("Loading vLLM student on cuda:0...")
+        # Clear DDP env vars so vLLM's spawned subprocess doesn't think it's a DDP rank
+        ddp_env_keys = ["RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE",
+                        "MASTER_ADDR", "MASTER_PORT", "GROUP_RANK", "TORCHELASTIC_RUN_ID"]
+        saved_env = {k: os.environ.pop(k) for k in ddp_env_keys if k in os.environ}
         vllm_student = LLM(
             STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
             enforce_eager=True,
         )
+        os.environ.update(saved_env)  # restore for DDP
 
         eval_prompts = [
             dataset[i]["input_ids_prompt"]
