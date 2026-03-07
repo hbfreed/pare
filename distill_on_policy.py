@@ -428,7 +428,7 @@ def main_ddp():
                 saved_env[k] = os.environ.pop(k)
         vllm_student = LLM(
             STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
-            enforce_eager=True,
+            enforce_eager=True, gpu_memory_utilization=0.98,
         )
         os.environ.update(saved_env)
 
