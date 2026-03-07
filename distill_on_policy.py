@@ -399,15 +399,20 @@ def main_ddp():
     sweep_steps = args.sweep
     wandb_run_id = args.wandb_run_id
 
-    # Init vLLM on rank 0 BEFORE DDP, since DDP's CUDA init breaks vLLM's subprocess spawn
+    # Init vLLM on rank 0 BEFORE DDP, since DDP's CUDA init breaks vLLM's subprocess spawn.
+    # Also clear torchrun env vars so vLLM's EngineCore subprocess doesn't try to join DDP.
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     vllm_student = None
     if local_rank == 0:
         print("Loading vLLM student on cuda:0...")
+        ddp_env_keys = ["RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE",
+                        "MASTER_ADDR", "MASTER_PORT", "GROUP_RANK", "TORCHELASTIC_RUN_ID"]
+        saved_env = {k: os.environ.pop(k) for k in ddp_env_keys if k in os.environ}
         vllm_student = LLM(
             STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
             enforce_eager=True,
         )
+        os.environ.update(saved_env)
 
     # DDP init (long timeout for rank 0 model loading)
     dist.init_process_group(backend="nccl", timeout=datetime.timedelta(minutes=30))
