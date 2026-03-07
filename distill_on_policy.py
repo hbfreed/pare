@@ -399,7 +399,17 @@ def main_ddp():
     sweep_steps = args.sweep
     wandb_run_id = args.wandb_run_id
 
-    # DDP init (long timeout for vLLM startup + CUDA graph warmup on rank 0)
+    # Init vLLM on rank 0 BEFORE DDP, since DDP's CUDA init breaks vLLM's subprocess spawn
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    vllm_student = None
+    if local_rank == 0:
+        print("Loading vLLM student on cuda:0...")
+        vllm_student = LLM(
+            STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
+            enforce_eager=True,
+        )
+
+    # DDP init (long timeout for rank 0 model loading)
     dist.init_process_group(backend="nccl", timeout=datetime.timedelta(minutes=30))
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -453,9 +463,8 @@ def main_ddp():
     warmup_steps = min(WARMUP_STEPS, total_steps // 5)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
 
-    # Rank 0 only: teacher, vLLM, wandb, eval prompts
+    # Rank 0 only: teacher, wandb, eval prompts
     teacher = None
-    vllm_student = None
     vllm_executor = None
     checkpoint_executor = None
     eval_prompts = None
@@ -467,17 +476,6 @@ def main_ddp():
         ).to(TEACHER_DEVICE)
         teacher.eval()
         print(f"Student vocab: {SHARED_VOCAB_SIZE}, Teacher vocab: {teacher.config.vocab_size}")
-
-        print("Loading vLLM student on cuda:0...")
-        # Clear DDP env vars so vLLM's spawned subprocess doesn't think it's a DDP rank
-        ddp_env_keys = ["RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE",
-                        "MASTER_ADDR", "MASTER_PORT", "GROUP_RANK", "TORCHELASTIC_RUN_ID"]
-        saved_env = {k: os.environ.pop(k) for k in ddp_env_keys if k in os.environ}
-        vllm_student = LLM(
-            STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
-            enforce_eager=True,
-        )
-        os.environ.update(saved_env)  # restore for DDP
 
         eval_prompts = [
             dataset[i]["input_ids_prompt"]
