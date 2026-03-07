@@ -471,6 +471,7 @@ def main_ddp():
         print("Loading vLLM student on cuda:0...")
         vllm_student = LLM(
             STUDENT, skip_tokenizer_init=True, tensor_parallel_size=1, dtype="bfloat16",
+            enforce_eager=True,
         )
 
         eval_prompts = [
