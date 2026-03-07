@@ -9,6 +9,7 @@ Launch with: torchrun --nproc_per_node=N distill_on_policy.py [args]
 """
 
 import argparse
+import datetime
 import io
 import os
 import shutil
@@ -398,8 +399,8 @@ def main_ddp():
     sweep_steps = args.sweep
     wandb_run_id = args.wandb_run_id
 
-    # DDP init
-    dist.init_process_group(backend="nccl")
+    # DDP init (long timeout for vLLM startup + CUDA graph warmup on rank 0)
+    dist.init_process_group(backend="nccl", timeout=datetime.timedelta(minutes=30))
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     device = f"cuda:{rank + DDP_GPU_OFFSET}"
