@@ -31,7 +31,7 @@ from transformers import AutoTokenizer, get_constant_schedule_with_warmup
 from vllm import LLM, SamplingParams
 
 import wandb
-from evals import run_evals
+# from evals import run_evals  # disabled: lm-eval incompatible with datasets on cluster
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -791,11 +791,11 @@ def main_ddp():
                         generate_samples, vllm_student, eval_prompts, tokenizer, max_context,
                     )
 
-                if global_step % EVAL_EVERY_N_STEPS == 0 and eval_future is None:
-                    eval_future = vllm_executor.submit(
-                        run_evals, vllm_student, tokenizer, STUDENT,
-                        tasks=EVAL_TASKS, limit=EVAL_N_SAMPLES,
-                    )
+                # if global_step % EVAL_EVERY_N_STEPS == 0 and eval_future is None:
+                #     eval_future = vllm_executor.submit(
+                #         run_evals, vllm_student, tokenizer, STUDENT,
+                #         tasks=EVAL_TASKS, limit=EVAL_N_SAMPLES,
+                #     )
 
                 hub_repo = None if DEBUG_MODE else HUB_REPO
                 if global_step % SAVE_EVERY_N_STEPS == 0:
