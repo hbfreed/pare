@@ -40,7 +40,6 @@ torch.backends.cudnn.benchmark = True
 torch._dynamo.config.capture_scalar_outputs = True
 torch._dynamo.config.allow_unspec_int_on_nn_module = True
 
-# DATASET = "allenai/Dolci-Think-RL-7B"
 DATASET = "allenai/Dolci-Instruct-RL"
 TEACHER = "allenai/Olmo-3-7B-Instruct"
 STUDENT = "hbfreed/pruned_olmo3_4096_16_29"
@@ -72,7 +71,7 @@ EVAL_EVERY_N_STEPS = 50
 EVAL_N_SAMPLES = 200
 EVAL_TASKS = ["gsm8k_cot", "arc_easy", "truthfulqa_mc2", "ifeval"]
 
-SAVE_EVERY = 500  # permanent milestone checkpoint every N steps
+SAVE_EVERY = 1000  # permanent milestone checkpoint every N steps
 SAVE_EVERY_N_STEPS = 50  # rolling checkpoint + HF push every N steps
 CHECKPOINT_BASE = "checkpoints/onpolicy-from-baseline"
 
@@ -872,12 +871,6 @@ def main_ddp():
                     sample_future = vllm_executor.submit(
                         generate_samples, vllm_student, eval_prompts, tokenizer, max_context,
                     )
-
-                # if global_step % EVAL_EVERY_N_STEPS == 0 and eval_future is None:
-                #     eval_future = vllm_executor.submit(
-                #         run_evals, vllm_student, tokenizer, STUDENT,
-                #         tasks=EVAL_TASKS, limit=EVAL_N_SAMPLES,
-                #     )
 
                 hub_repo = None if DEBUG_MODE else HUB_REPO
                 if global_step % SAVE_EVERY_N_STEPS == 0:

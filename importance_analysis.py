@@ -121,7 +121,6 @@ def main():
             make_output_hook(f"layer_{i}.ffn_ln")
         )
         layer.register_forward_hook(make_layer_hook(f"layer_{i}"))
-    # model = torch.compile(model)  # tbd if this works
 
     for batch_idx in tqdm(range(0, num_samples, batch_size)):
         batch = all_tokens[batch_idx : batch_idx + batch_size].to(DEVICE)
