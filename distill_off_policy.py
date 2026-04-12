@@ -166,7 +166,8 @@ val_path = f"{CHUNKS_DIR}/val.pt"
 
 if not train_chunk_files or not os.path.exists(val_path):
     print(f"ERROR: Pre-packed data not found in {CHUNKS_DIR}/")
-    import sys; sys.exit(1)
+    import sys
+    sys.exit(1)
 
 print(f"Loading pre-packed data from {CHUNKS_DIR}/...")
 val_packed = torch.load(val_path, weights_only=False)
