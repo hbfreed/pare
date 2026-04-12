@@ -15,7 +15,7 @@ import json
 import time
 from pathlib import Path
 
-from datasets import load_from_disk, Dataset, concatenate_datasets
+from datasets import load_from_disk, Dataset
 from openai import AsyncOpenAI
 from tqdm import tqdm
 from transformers import AutoTokenizer
